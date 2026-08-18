@@ -1,0 +1,2197 @@
+const http = require("http");
+const crypto = require("crypto");
+
+const PORT = 3000;
+
+/*
+========================================================
+IN-MEMORY DATABASE
+========================================================
+*/
+
+let complaints = [
+  {
+    id: crypto.randomUUID(),
+    residentName: "Rahul Kumar",
+    roomNumber: "B-204",
+    contact: "9876543210",
+    category: "Plumbing",
+    description: "Water leakage from bathroom pipe.",
+    priority: "High",
+    status: "In Progress",
+    additionalInfo: "Leakage is increasing.",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: crypto.randomUUID(),
+    residentName: "Priya Sharma",
+    roomNumber: "A-102",
+    contact: "9876543211",
+    category: "Internet",
+    description: "Wi-Fi connection is not working properly.",
+    priority: "Medium",
+    status: "Pending",
+    additionalInfo: "Internet disconnects frequently.",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }
+];
+
+
+/*
+========================================================
+HELPER FUNCTIONS
+========================================================
+*/
+
+function sendJSON(res, statusCode, data) {
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*"
+  });
+
+  res.end(JSON.stringify(data));
+}
+
+function sendHTML(res, html) {
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8"
+  });
+
+  res.end(html);
+}
+
+function getRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+
+    req.on("data", chunk => {
+      body += chunk.toString();
+
+      // Prevent very large requests
+      if (body.length > 1000000) {
+        req.destroy();
+        reject(new Error("Request body too large"));
+      }
+    });
+
+    req.on("end", () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (error) {
+        reject(new Error("Invalid JSON"));
+      }
+    });
+
+    req.on("error", reject);
+  });
+}
+
+function validateComplaint(data) {
+  const errors = [];
+
+  if (!data.residentName || data.residentName.trim().length < 2) {
+    errors.push("Resident name is required.");
+  }
+
+  if (!data.roomNumber || data.roomNumber.trim().length === 0) {
+    errors.push("Room/Flat number is required.");
+  }
+
+  if (!data.contact || !/^[0-9]{10}$/.test(data.contact)) {
+    errors.push("Contact must contain exactly 10 digits.");
+  }
+
+  const categories = [
+    "Electricity",
+    "Plumbing",
+    "Water Supply",
+    "Internet",
+    "Housekeeping",
+    "Maintenance",
+    "Security",
+    "Other"
+  ];
+
+  if (!categories.includes(data.category)) {
+    errors.push("Invalid complaint category.");
+  }
+
+  if (!data.description || data.description.trim().length < 10) {
+    errors.push("Description must contain at least 10 characters.");
+  }
+
+  const priorities = ["Low", "Medium", "High", "Critical"];
+
+  if (!priorities.includes(data.priority)) {
+    errors.push("Invalid priority.");
+  }
+
+  return errors;
+}
+
+function findComplaint(id) {
+  return complaints.find(c => c.id === id);
+}
+
+
+/*
+========================================================
+FRONTEND
+========================================================
+*/
+
+const html = `
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<title>PG Complaint Management System</title>
+
+<style>
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #f1f5f9;
+    color: #1e293b;
+}
+
+header {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: white;
+    padding: 25px;
+    text-align: center;
+}
+
+header h1 {
+    margin-bottom: 8px;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 25px auto;
+    padding: 0 15px;
+}
+
+.dashboard {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 15px;
+    margin-bottom: 25px;
+}
+
+.stat {
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.stat h2 {
+    font-size: 30px;
+    color: #2563eb;
+}
+
+.stat p {
+    color: #64748b;
+    margin-top: 5px;
+}
+
+.card {
+    background: white;
+    padding: 25px;
+    margin-bottom: 25px;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+}
+
+.card h2 {
+    margin-bottom: 20px;
+    color: #1e3a8a;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.form-group.full {
+    grid-column: 1 / -1;
+}
+
+label {
+    font-weight: bold;
+    margin-bottom: 7px;
+}
+
+input,
+select,
+textarea {
+    padding: 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    font-size: 15px;
+}
+
+textarea {
+    min-height: 100px;
+    resize: vertical;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: #2563eb;
+}
+
+button {
+    border: none;
+    border-radius: 7px;
+    padding: 10px 15px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.primary {
+    background: #2563eb;
+    color: white;
+}
+
+.primary:hover {
+    background: #1d4ed8;
+}
+
+.secondary {
+    background: #64748b;
+    color: white;
+}
+
+.danger {
+    background: #dc2626;
+    color: white;
+}
+
+.success {
+    background: #16a34a;
+    color: white;
+}
+
+.warning {
+    background: #f59e0b;
+    color: white;
+}
+
+button:hover {
+    opacity: 0.9;
+}
+
+.form-buttons {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.filters {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.complaint {
+    border: 1px solid #e2e8f0;
+    border-left: 5px solid #2563eb;
+    border-radius: 8px;
+    padding: 18px;
+    margin-bottom: 15px;
+    background: #fff;
+}
+
+.complaint-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.complaint-header h3 {
+    color: #1e3a8a;
+}
+
+.details {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 15px;
+}
+
+.badge {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.pending {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.progress {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.resolved {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.cancelled {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.low {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.medium {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.high {
+    background: #ffedd5;
+    color: #9a3412;
+}
+
+.critical {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.message {
+    padding: 12px;
+    border-radius: 7px;
+    margin-bottom: 15px;
+    display: none;
+}
+
+.message.success-message {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.message.error-message {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.6);
+}
+
+.modal-content {
+    background: white;
+    width: 90%;
+    max-width: 650px;
+    margin: 5% auto;
+    padding: 25px;
+    border-radius: 12px;
+    max-height: 85vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.close {
+    font-size: 28px;
+    cursor: pointer;
+}
+
+.detail-row {
+    padding: 10px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.detail-row strong {
+    display: inline-block;
+    width: 160px;
+}
+
+.empty {
+    text-align: center;
+    padding: 30px;
+    color: #64748b;
+}
+
+@media(max-width: 800px) {
+
+    .dashboard {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .form-group.full {
+        grid-column: auto;
+    }
+
+    .filters {
+        grid-template-columns: 1fr;
+    }
+
+    .details {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media(max-width: 500px) {
+
+    .dashboard {
+        grid-template-columns: 1fr;
+    }
+
+    .complaint-header {
+        flex-direction: column;
+    }
+
+    .form-buttons {
+        flex-direction: column;
+    }
+
+    .form-buttons button {
+        width: 100%;
+    }
+}
+
+</style>
+
+</head>
+
+<body>
+
+<header>
+
+<h1>Apartment / PG Complaint Management System</h1>
+
+<p>Report and track maintenance issues easily</p>
+
+</header>
+
+
+<div class="container">
+
+<!-- Dashboard -->
+
+<div class="dashboard">
+
+<div class="stat">
+<h2 id="totalCount">0</h2>
+<p>Total Complaints</p>
+</div>
+
+<div class="stat">
+<h2 id="pendingCount">0</h2>
+<p>Pending</p>
+</div>
+
+<div class="stat">
+<h2 id="progressCount">0</h2>
+<p>In Progress</p>
+</div>
+
+<div class="stat">
+<h2 id="resolvedCount">0</h2>
+<p>Resolved</p>
+</div>
+
+</div>
+
+
+<!-- Message -->
+
+<div id="message" class="message"></div>
+
+
+<!-- Complaint Form -->
+
+<div class="card">
+
+<h2 id="formTitle">Submit New Complaint</h2>
+
+<form id="complaintForm">
+
+<div class="form-grid">
+
+<div class="form-group">
+
+<label>Resident Name *</label>
+
+<input
+    type="text"
+    id="residentName"
+    placeholder="Enter your name"
+    required
+>
+
+</div>
+
+
+<div class="form-group">
+
+<label>Room / Flat Number *</label>
+
+<input
+    type="text"
+    id="roomNumber"
+    placeholder="Example: A-203"
+    required
+>
+
+</div>
+
+
+<div class="form-group">
+
+<label>Contact Information *</label>
+
+<input
+    type="text"
+    id="contact"
+    placeholder="10 digit mobile number"
+    maxlength="10"
+    required
+>
+
+</div>
+
+
+<div class="form-group">
+
+<label>Complaint Category *</label>
+
+<select id="category" required>
+
+<option value="">Select Category</option>
+
+<option>Electricity</option>
+<option>Plumbing</option>
+<option>Water Supply</option>
+<option>Internet</option>
+<option>Housekeeping</option>
+<option>Maintenance</option>
+<option>Security</option>
+<option>Other</option>
+
+</select>
+
+</div>
+
+
+<div class="form-group">
+
+<label>Priority / Severity *</label>
+
+<select id="priority" required>
+
+<option value="">Select Priority</option>
+
+<option>Low</option>
+<option>Medium</option>
+<option>High</option>
+<option>Critical</option>
+
+</select>
+
+</div>
+
+
+<div class="form-group full">
+
+<label>Description *</label>
+
+<textarea
+    id="description"
+    placeholder="Describe your problem in detail..."
+    required
+></textarea>
+
+</div>
+
+
+<div class="form-group full">
+
+<label>Additional Information</label>
+
+<textarea
+    id="additionalInfo"
+    placeholder="Any additional information..."
+></textarea>
+
+</div>
+
+
+<div class="form-buttons">
+
+<button type="submit" class="primary">
+Submit Complaint
+</button>
+
+<button
+    type="button"
+    class="secondary"
+    id="cancelEdit"
+    style="display:none"
+>
+Cancel Edit
+</button>
+
+</div>
+
+</div>
+
+</form>
+
+</div>
+
+
+<!-- Complaint List -->
+
+<div class="card">
+
+<h2>Submitted Complaints</h2>
+
+
+<div class="filters">
+
+<input
+    type="text"
+    id="search"
+    placeholder="Search by name, room or description..."
+>
+
+
+<select id="filterCategory">
+
+<option value="">All Categories</option>
+
+<option>Electricity</option>
+<option>Plumbing</option>
+<option>Water Supply</option>
+<option>Internet</option>
+<option>Housekeeping</option>
+<option>Maintenance</option>
+<option>Security</option>
+<option>Other</option>
+
+</select>
+
+
+<select id="filterStatus">
+
+<option value="">All Status</option>
+
+<option>Pending</option>
+<option>In Progress</option>
+<option>Resolved</option>
+<option>Cancelled</option>
+
+</select>
+
+
+<select id="filterPriority">
+
+<option value="">All Priorities</option>
+
+<option>Low</option>
+<option>Medium</option>
+<option>High</option>
+<option>Critical</option>
+
+</select>
+
+</div>
+
+
+<div id="complaintList"></div>
+
+</div>
+
+</div>
+
+
+<!-- Details Modal -->
+
+<div id="detailsModal" class="modal">
+
+<div class="modal-content">
+
+<div class="modal-header">
+
+<h2>Complaint Details</h2>
+
+<span class="close" onclick="closeModal()">&times;</span>
+
+</div>
+
+<div id="complaintDetails"></div>
+
+</div>
+
+</div>
+
+
+<script>
+
+let complaints = [];
+
+let editingId = null;
+
+
+/*
+========================================================
+UTILITY
+========================================================
+*/
+
+function showMessage(text, type = "success") {
+
+    const message = document.getElementById("message");
+
+    message.textContent = text;
+
+    message.className =
+        "message " +
+        (type === "success"
+            ? "success-message"
+            : "error-message");
+
+    message.style.display = "block";
+
+    setTimeout(() => {
+        message.style.display = "none";
+    }, 3500);
+}
+
+
+function escapeHTML(value) {
+
+    if (!value) return "";
+
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+
+function formatDate(date) {
+
+    return new Date(date).toLocaleString();
+}
+
+
+function statusClass(status) {
+
+    if (status === "Pending") return "pending";
+
+    if (status === "In Progress") return "progress";
+
+    if (status === "Resolved") return "resolved";
+
+    if (status === "Cancelled") return "cancelled";
+
+    return "";
+}
+
+
+function priorityClass(priority) {
+
+    return priority.toLowerCase();
+}
+
+
+/*
+========================================================
+API
+========================================================
+*/
+
+async function api(url, options = {}) {
+
+    const response = await fetch(url, {
+        headers: {
+            "Content-Type": "application/json"
+        },
+        ...options
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+        throw new Error(data.message || "Something went wrong");
+    }
+
+    return data;
+}
+
+
+/*
+========================================================
+LOAD COMPLAINTS
+========================================================
+*/
+
+async function loadComplaints() {
+
+    try {
+
+        const search =
+            document.getElementById("search").value;
+
+        const category =
+            document.getElementById("filterCategory").value;
+
+        const status =
+            document.getElementById("filterStatus").value;
+
+        const priority =
+            document.getElementById("filterPriority").value;
+
+
+        const params = new URLSearchParams();
+
+        if (search) params.append("search", search);
+
+        if (category) params.append("category", category);
+
+        if (status) params.append("status", status);
+
+        if (priority) params.append("priority", priority);
+
+
+        const result =
+            await api("/api/complaints?" + params.toString());
+
+
+        complaints = result.complaints;
+
+        displayComplaints();
+
+        updateDashboard();
+
+    } catch (error) {
+
+        showMessage(error.message, "error");
+
+    }
+
+}
+
+
+/*
+========================================================
+DISPLAY COMPLAINTS
+========================================================
+*/
+
+function displayComplaints() {
+
+    const list =
+        document.getElementById("complaintList");
+
+
+    if (complaints.length === 0) {
+
+        list.innerHTML = `
+            <div class="empty">
+                <h3>No complaints found</h3>
+                <p>Try changing your search or filters.</p>
+            </div>
+        `;
+
+        return;
+    }
+
+
+    list.innerHTML = complaints.map(c => `
+
+        <div class="complaint">
+
+            <div class="complaint-header">
+
+                <div>
+
+                    <h3>
+                        ${escapeHTML(c.category)}
+                    </h3>
+
+                    <small>
+                        Complaint ID:
+                        ${escapeHTML(c.id.substring(0, 8))}
+                    </small>
+
+                </div>
+
+                <div>
+
+                    <span class="badge ${statusClass(c.status)}">
+                        ${escapeHTML(c.status)}
+                    </span>
+
+                    <span class="badge ${priorityClass(c.priority)}">
+                        ${escapeHTML(c.priority)}
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <div class="details">
+
+                <div>
+                    <strong>Resident:</strong>
+                    ${escapeHTML(c.residentName)}
+                </div>
+
+                <div>
+                    <strong>Room:</strong>
+                    ${escapeHTML(c.roomNumber)}
+                </div>
+
+                <div>
+                    <strong>Contact:</strong>
+                    ${escapeHTML(c.contact)}
+                </div>
+
+                <div>
+                    <strong>Date:</strong>
+                    ${formatDate(c.createdAt)}
+                </div>
+
+            </div>
+
+
+            <p>
+                <strong>Description:</strong>
+                ${escapeHTML(c.description)}
+            </p>
+
+
+            <br>
+
+
+            <div class="actions">
+
+                <button
+                    class="primary"
+                    onclick="viewComplaint('${c.id}')"
+                >
+                    View
+                </button>
+
+
+                ${
+                    c.status !== "Resolved" &&
+                    c.status !== "Cancelled"
+                    ?
+                    `
+                    <button
+                        class="warning"
+                        onclick="editComplaint('${c.id}')"
+                    >
+                        Edit
+                    </button>
+                    `
+                    :
+                    ""
+                }
+
+
+                ${
+                    c.status !== "Resolved" &&
+                    c.status !== "Cancelled"
+                    ?
+                    `
+                    <button
+                        class="success"
+                        onclick="changeStatus('${c.id}', 'Resolved')"
+                    >
+                        Mark Resolved
+                    </button>
+                    `
+                    :
+                    ""
+                }
+
+
+                ${
+                    c.status === "Pending"
+                    ?
+                    `
+                    <button
+                        class="danger"
+                        onclick="cancelComplaint('${c.id}')"
+                    >
+                        Cancel
+                    </button>
+                    `
+                    :
+                    ""
+                }
+
+            </div>
+
+        </div>
+
+    `).join("");
+
+}
+
+
+/*
+========================================================
+DASHBOARD
+========================================================
+*/
+
+async function updateDashboard() {
+
+    try {
+
+        const result =
+            await api("/api/complaints");
+
+        const all = result.complaints;
+
+        document.getElementById("totalCount").textContent =
+            all.length;
+
+        document.getElementById("pendingCount").textContent =
+            all.filter(c => c.status === "Pending").length;
+
+        document.getElementById("progressCount").textContent =
+            all.filter(c => c.status === "In Progress").length;
+
+        document.getElementById("resolvedCount").textContent =
+            all.filter(c => c.status === "Resolved").length;
+
+    } catch (error) {
+
+        console.error(error);
+
+    }
+
+}
+
+
+/*
+========================================================
+SUBMIT / UPDATE COMPLAINT
+========================================================
+*/
+
+document
+.getElementById("complaintForm")
+.addEventListener("submit", async function(event) {
+
+    event.preventDefault();
+
+
+    const data = {
+
+        residentName:
+            document.getElementById("residentName").value.trim(),
+
+        roomNumber:
+            document.getElementById("roomNumber").value.trim(),
+
+        contact:
+            document.getElementById("contact").value.trim(),
+
+        category:
+            document.getElementById("category").value,
+
+        description:
+            document.getElementById("description").value.trim(),
+
+        priority:
+            document.getElementById("priority").value,
+
+        additionalInfo:
+            document.getElementById("additionalInfo").value.trim()
+
+    };
+
+
+    try {
+
+        if (editingId) {
+
+            await api(
+                "/api/complaints/" + editingId,
+                {
+                    method: "PUT",
+                    body: JSON.stringify(data)
+                }
+            );
+
+            showMessage(
+                "Complaint updated successfully."
+            );
+
+        } else {
+
+            await api(
+                "/api/complaints",
+                {
+                    method: "POST",
+                    body: JSON.stringify(data)
+                }
+            );
+
+            showMessage(
+                "Complaint submitted successfully."
+            );
+
+        }
+
+
+        resetForm();
+
+        loadComplaints();
+
+    } catch (error) {
+
+        showMessage(
+            error.message,
+            "error"
+        );
+
+    }
+
+});
+
+
+/*
+========================================================
+EDIT COMPLAINT
+========================================================
+*/
+
+async function editComplaint(id) {
+
+    try {
+
+        const result =
+            await api("/api/complaints/" + id);
+
+        const c = result.complaint;
+
+        editingId = id;
+
+
+        document.getElementById("residentName").value =
+            c.residentName;
+
+        document.getElementById("roomNumber").value =
+            c.roomNumber;
+
+        document.getElementById("contact").value =
+            c.contact;
+
+        document.getElementById("category").value =
+            c.category;
+
+        document.getElementById("description").value =
+            c.description;
+
+        document.getElementById("priority").value =
+            c.priority;
+
+        document.getElementById("additionalInfo").value =
+            c.additionalInfo || "";
+
+
+        document.getElementById("formTitle").textContent =
+            "Update Complaint";
+
+        document.getElementById("cancelEdit").style.display =
+            "inline-block";
+
+
+        window.scrollTo({
+            top: 300,
+            behavior: "smooth"
+        });
+
+    } catch (error) {
+
+        showMessage(error.message, "error");
+
+    }
+
+}
+
+
+/*
+========================================================
+RESET FORM
+========================================================
+*/
+
+function resetForm() {
+
+    editingId = null;
+
+    document.getElementById("complaintForm").reset();
+
+    document.getElementById("formTitle").textContent =
+        "Submit New Complaint";
+
+    document.getElementById("cancelEdit").style.display =
+        "none";
+
+}
+
+
+document
+.getElementById("cancelEdit")
+.addEventListener("click", resetForm);
+
+
+/*
+========================================================
+VIEW DETAILS
+========================================================
+*/
+
+async function viewComplaint(id) {
+
+    try {
+
+        const result =
+            await api("/api/complaints/" + id);
+
+        const c = result.complaint;
+
+
+        document.getElementById("complaintDetails").innerHTML = `
+
+            <div class="detail-row">
+                <strong>Complaint ID:</strong>
+                ${escapeHTML(c.id)}
+            </div>
+
+            <div class="detail-row">
+                <strong>Resident Name:</strong>
+                ${escapeHTML(c.residentName)}
+            </div>
+
+            <div class="detail-row">
+                <strong>Room / Flat:</strong>
+                ${escapeHTML(c.roomNumber)}
+            </div>
+
+            <div class="detail-row">
+                <strong>Contact:</strong>
+                ${escapeHTML(c.contact)}
+            </div>
+
+            <div class="detail-row">
+                <strong>Category:</strong>
+                ${escapeHTML(c.category)}
+            </div>
+
+            <div class="detail-row">
+                <strong>Priority:</strong>
+
+                <span class="badge ${priorityClass(c.priority)}">
+                    ${escapeHTML(c.priority)}
+                </span>
+
+            </div>
+
+            <div class="detail-row">
+                <strong>Status:</strong>
+
+                <span class="badge ${statusClass(c.status)}">
+                    ${escapeHTML(c.status)}
+                </span>
+
+            </div>
+
+            <div class="detail-row">
+                <strong>Description:</strong>
+                ${escapeHTML(c.description)}
+            </div>
+
+            <div class="detail-row">
+                <strong>Additional Info:</strong>
+                ${escapeHTML(c.additionalInfo || "None")}
+            </div>
+
+            <div class="detail-row">
+                <strong>Created:</strong>
+                ${formatDate(c.createdAt)}
+            </div>
+
+            <div class="detail-row">
+                <strong>Last Updated:</strong>
+                ${formatDate(c.updatedAt)}
+            </div>
+
+            ${
+                c.status !== "Resolved" &&
+                c.status !== "Cancelled"
+                ?
+                `
+                <br>
+
+                <label>
+                    Update Status
+                </label>
+
+                <select
+                    id="modalStatus"
+                    style="width:100%; margin-top:8px;"
+                >
+
+                    <option
+                        ${c.status === "Pending" ? "selected" : ""}
+                    >
+                        Pending
+                    </option>
+
+                    <option
+                        ${c.status === "In Progress" ? "selected" : ""}
+                    >
+                        In Progress
+                    </option>
+
+                    <option
+                        ${c.status === "Resolved" ? "selected" : ""}
+                    >
+                        Resolved
+                    </option>
+
+                    <option
+                        ${c.status === "Cancelled" ? "selected" : ""}
+                    >
+                        Cancelled
+                    </option>
+
+                </select>
+
+                <br>
+
+                <button
+                    class="primary"
+                    onclick="updateModalStatus('${c.id}')"
+                >
+                    Update Status
+                </button>
+                `
+                :
+                ""
+            }
+
+        `;
+
+
+        document.getElementById("detailsModal").style.display =
+            "block";
+
+    } catch (error) {
+
+        showMessage(error.message, "error");
+
+    }
+
+}
+
+
+async function updateModalStatus(id) {
+
+    const status =
+        document.getElementById("modalStatus").value;
+
+    await changeStatus(id, status);
+
+    closeModal();
+
+}
+
+
+function closeModal() {
+
+    document.getElementById("detailsModal").style.display =
+        "none";
+
+}
+
+
+window.onclick = function(event) {
+
+    const modal =
+        document.getElementById("detailsModal");
+
+    if (event.target === modal) {
+        closeModal();
+    }
+
+};
+
+
+/*
+========================================================
+CHANGE STATUS
+========================================================
+*/
+
+async function changeStatus(id, status) {
+
+    try {
+
+        await api(
+            "/api/complaints/" + id + "/status",
+            {
+                method: "PATCH",
+                body: JSON.stringify({
+                    status: status
+                })
+            }
+        );
+
+
+        showMessage(
+            "Complaint status updated successfully."
+        );
+
+        loadComplaints();
+
+    } catch (error) {
+
+        showMessage(
+            error.message,
+            "error"
+        );
+
+    }
+
+}
+
+
+/*
+========================================================
+CANCEL COMPLAINT
+========================================================
+*/
+
+async function cancelComplaint(id) {
+
+    const confirmCancel =
+        confirm(
+            "Are you sure you want to cancel this complaint?"
+        );
+
+    if (!confirmCancel) {
+        return;
+    }
+
+
+    try {
+
+        await api(
+            "/api/complaints/" + id,
+            {
+                method: "DELETE"
+            }
+        );
+
+
+        showMessage(
+            "Complaint cancelled successfully."
+        );
+
+        loadComplaints();
+
+    } catch (error) {
+
+        showMessage(
+            error.message,
+            "error"
+        );
+
+    }
+
+}
+
+
+/*
+========================================================
+FILTER EVENTS
+========================================================
+*/
+
+document
+.getElementById("search")
+.addEventListener("input", loadComplaints);
+
+document
+.getElementById("filterCategory")
+.addEventListener("change", loadComplaints);
+
+document
+.getElementById("filterStatus")
+.addEventListener("change", loadComplaints);
+
+document
+.getElementById("filterPriority")
+.addEventListener("change", loadComplaints);
+
+
+/*
+========================================================
+INITIAL LOAD
+========================================================
+*/
+
+loadComplaints();
+
+</script>
+
+</body>
+
+</html>
+`;
+
+
+/*
+========================================================
+SERVER
+========================================================
+*/
+
+const server = http.createServer(async (req, res) => {
+
+    const url = new URL(
+        req.url,
+        `http://${req.headers.host}`
+    );
+
+    const pathname = url.pathname;
+
+
+    /*
+    -----------------------------------------------
+    FRONTEND
+    -----------------------------------------------
+    */
+
+    if (req.method === "GET" && pathname === "/") {
+
+        sendHTML(res, html);
+
+        return;
+    }
+
+
+    /*
+    -----------------------------------------------
+    GET ALL COMPLAINTS
+    -----------------------------------------------
+    */
+
+    if (
+        req.method === "GET" &&
+        pathname === "/api/complaints"
+    ) {
+
+        let result = [...complaints];
+
+
+        const search =
+            url.searchParams.get("search");
+
+        const category =
+            url.searchParams.get("category");
+
+        const status =
+            url.searchParams.get("status");
+
+        const priority =
+            url.searchParams.get("priority");
+
+
+        if (search) {
+
+            const searchText =
+                search.toLowerCase();
+
+            result = result.filter(c =>
+                c.residentName.toLowerCase().includes(searchText) ||
+                c.roomNumber.toLowerCase().includes(searchText) ||
+                c.description.toLowerCase().includes(searchText) ||
+                c.category.toLowerCase().includes(searchText)
+            );
+
+        }
+
+
+        if (category) {
+
+            result = result.filter(
+                c => c.category === category
+            );
+
+        }
+
+
+        if (status) {
+
+            result = result.filter(
+                c => c.status === status
+            );
+
+        }
+
+
+        if (priority) {
+ 
+            result = result.filter(
+                c => c.priority === priority
+            );
+
+        }
+
+
+        // Newest complaints first
+        result.sort(
+            (a, b) =>
+                new Date(b.createdAt) -
+                new Date(a.createdAt)
+        );
+
+
+        sendJSON(res, 200, {
+            success: true,
+            count: result.length,
+            complaints: result
+        });
+
+        return;
+    }
+
+
+    /*
+    -----------------------------------------------
+    GET SINGLE COMPLAINT
+    -----------------------------------------------
+    */
+
+    const singleMatch =
+        pathname.match(
+            /^\\/api\\/complaints\\/([^/]+)$/
+        );
+
+
+    if (
+        req.method === "GET" &&
+        singleMatch
+    ) {
+
+        const id = singleMatch[1];
+
+        const complaint =
+            findComplaint(id);
+
+
+        if (!complaint) {
+
+            sendJSON(res, 404, {
+                success: false,
+                message: "Complaint not found."
+            });
+
+            return;
+        }
+
+
+        sendJSON(res, 200, {
+            success: true,
+            complaint: complaint
+        });
+
+        return;
+    }
+
+
+    /*
+    -----------------------------------------------
+    CREATE COMPLAINT
+    -----------------------------------------------
+    */
+
+    if (
+        req.method === "POST" &&
+        pathname === "/api/complaints"
+    ) {
+
+        try {
+
+            const data =
+                await getRequestBody(req);
+
+
+            const errors =
+                validateComplaint(data);
+
+
+            if (errors.length > 0) {
+
+                sendJSON(res, 400, {
+                    success: false,
+                    message: errors.join(" ")
+                });
+
+                return;
+            }
+
+
+            const complaint = {
+
+                id: crypto.randomUUID(),
+
+                residentName:
+                    data.residentName.trim(),
+
+                roomNumber:
+                    data.roomNumber.trim(),
+
+                contact:
+                    data.contact.trim(),
+
+                category:
+                    data.category,
+
+                description:
+                    data.description.trim(),
+
+                priority:
+                    data.priority,
+
+                status:
+                    "Pending",
+
+                additionalInfo:
+                    data.additionalInfo
+                        ? data.additionalInfo.trim()
+                        : "",
+
+                createdAt:
+                    new Date().toISOString(),
+
+                updatedAt:
+                    new Date().toISOString()
+
+            };
+
+
+            complaints.push(complaint);
+
+
+            sendJSON(res, 201, {
+
+                success: true,
+
+                message:
+                    "Complaint created successfully.",
+
+                complaint: complaint
+
+            });
+
+        } catch (error) {
+
+            sendJSON(res, 400, {
+                success: false,
+                message: error.message
+            });
+
+        }
+
+        return;
+    }
+
+
+    /*
+    -----------------------------------------------
+    UPDATE COMPLAINT
+    -----------------------------------------------
+    */
+
+    if (
+        req.method === "PUT" &&
+        singleMatch
+    ) {
+
+        try {
+
+            const id =
+                singleMatch[1];
+
+            const complaint =
+                findComplaint(id);
+
+
+            if (!complaint) {
+
+                sendJSON(res, 404, {
+                    success: false,
+                    message: "Complaint not found."
+                });
+
+                return;
+            }
+
+
+            // Do not allow editing resolved/cancelled complaints
+            if (
+                complaint.status === "Resolved" ||
+                complaint.status === "Cancelled"
+            ) {
+
+                sendJSON(res, 400, {
+                    success: false,
+                    message:
+                        "Resolved or cancelled complaints cannot be edited."
+                });
+
+                return;
+            }
+
+
+            const data =
+                await getRequestBody(req);
+
+
+            const errors =
+                validateComplaint(data);
+
+
+            if (errors.length > 0) {
+
+                sendJSON(res, 400, {
+                    success: false,
+                    message: errors.join(" ")
+                });
+
+                return;
+            }
+
+
+            complaint.residentName =
+                data.residentName.trim();
+
+            complaint.roomNumber =
+                data.roomNumber.trim();
+
+            complaint.contact =
+                data.contact.trim();
+
+            complaint.category =
+                data.category;
+
+            complaint.description =
+                data.description.trim();
+
+            complaint.priority =
+                data.priority;
+
+            complaint.additionalInfo =
+                data.additionalInfo
+                    ? data.additionalInfo.trim()
+                    : "";
+
+            complaint.updatedAt =
+                new Date().toISOString();
+
+
+            sendJSON(res, 200, {
+
+                success: true,
+
+                message:
+                    "Complaint updated successfully.",
+
+                complaint: complaint
+
+            });
+
+        } catch (error) {
+
+            sendJSON(res, 400, {
+                success: false,
+                message: error.message
+            });
+
+        }
+
+        return;
+    }
+
+
+    /*
+    -----------------------------------------------
+    DELETE / CANCEL COMPLAINT
+    -----------------------------------------------
+    */
+
+    if (
+        req.method === "DELETE" &&
+        singleMatch
+    ) {
+
+        const id =
+            singleMatch[1];
+
+        const index =
+            complaints.findIndex(
+                c => c.id === id
+            );
+
+
+        if (index === -1) {
+
+            sendJSON(res, 404, {
+                success: false,
+                message: "Complaint not found."
+            });
+
+            return;
+        }
+
+
+        const complaint =
+            complaints[index];
+
+
+        if (
+            complaint.status !== "Pending"
+        ) {
+
+            sendJSON(res, 400, {
+
+                success: false,
+
+                message:
+                    "Only pending complaints can be cancelled."
+
+            });
+
+            return;
+        }
+
+
+        // Instead of physically deleting,
+        // mark complaint as cancelled.
+        complaint.status =
+            "Cancelled";
+
+        complaint.updatedAt =
+            new Date().toISOString();
+
+
+        sendJSON(res, 200, {
+
+            success: true,
+
+            message:
+                "Complaint cancelled successfully.",
+
+            complaint: complaint
+
+        });
+
+        return;
+    }
+
+
+    /*
+    -----------------------------------------------
+    UPDATE STATUS
+    -----------------------------------------------
+    */
+
+    const statusMatch =
+        pathname.match(
+            /^\\/api\\/complaints\\/([^/]+)\\/status$/
+        );
+
+
+    if (
+        req.method === "PATCH" &&
+        statusMatch
+    ) {
+
+        try {
+
+            const id =
+                statusMatch[1];
+
+            const complaint =
+                findComplaint(id);
+
+
+            if (!complaint) {
+
+                sendJSON(res, 404, {
+                    success: false,
+                    message: "Complaint not found."
+                });
+
+                return;
+            }
+
+
+            const data =
+                await getRequestBody(req);
+
+
+            const validStatuses = [
+                "Pending",
+                "In Progress",
+                "Resolved",
+                "Cancelled"
+            ];
+
+
+            if (
+                !validStatuses.includes(data.status)
+            ) {
+
+                sendJSON(res, 400, {
+
+                    success: false,
+
+                    message:
+                        "Invalid complaint status."
+
+                });
+
+                return;
+            }
+
+
+            complaint.status =
+                data.status;
+
+            complaint.updatedAt =
+                new Date().toISOString();
+
+
+            sendJSON(res, 200, {
+
+                success: true,
+
+                message:
+                    "Complaint status updated successfully.",
+
+                complaint: complaint
+
+            });
+
+        } catch (error) {
+
+            sendJSON(res, 400, {
+                success: false,
+                message: error.message
+            });
+
+        }
+
+        return;
+    }
+
+
+    /*
+    -----------------------------------------------
+    404
+    -----------------------------------------------
+    */
+
+    sendJSON(res, 404, {
+
+        success: false,
+
+        message:
+            "API endpoint not found."
+
+    });
+
+});
+
+
+/*
+========================================================
+START SERVER
+========================================================
+*/
+
+server.listen(PORT, () => {
+
+    console.log(
+        `Complaint Management System running at http://localhost:${PORT}`
+    );
+
+});
