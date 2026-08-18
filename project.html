@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PG Complaint System</title>
+    <style>
+        body {
+    font-family: Arial;
+    background: rgb(34,56,67);
+}
+
+h1 {
+    text-align: center;
+    color: blue;
+}
+
+.container {
+    width: 90%;
+    max-width: 600px;
+    margin: auto;
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+}
+
+input, select, textarea {
+    width: 100%;
+    padding: 10px;
+    margin: 8px 0;
+    box-sizing: border-box;
+}
+
+textarea {
+    height: 80px;
+}
+
+button {
+    width: 100%;
+    padding: 10px;
+    background: blue;
+    color: white;
+    border: none;
+    cursor: pointer;
+}
+
+.complaint {
+    border: 1px solid #ccc;
+    padding: 10px;
+    margin-top: 10px;
+}
+
+.delete {
+    background: red;
+    margin-top: 5px;
+}
+
+    </style>
+
+</head>
+
+<body>
+
+    <h1>PG Complaint Management</h1>
+
+    <div class="container">
+
+        <h2>Add Complaint</h2>
+
+        <input type="text" id="name" placeholder="Resident Name">
+
+        <input type="text" id="room" placeholder="Room Number">
+
+        <select id="category">
+            <option value="">Select Category</option>
+            <option>Electricity</option>
+            <option>Plumbing</option>
+            <option>Water</option>
+            <option>Internet</option>
+            <option>Maintenance</option>
+        </select>
+
+        <textarea id="description"
+            placeholder="Describe your problem"></textarea>
+
+        <button onclick="addComplaint()">
+            Submit Complaint
+        </button>
+
+        <p id="message"></p>
+
+        <h2>Complaints</h2>
+
+        <input
+            type="text"
+            id="search"
+            placeholder="Search..."
+            onkeyup="showComplaints()"
+        >
+
+        <div id="complaints"></div>
+
+    </div>
+
+    <script src="script2.js"></script>
+
+</body>
+</html>
