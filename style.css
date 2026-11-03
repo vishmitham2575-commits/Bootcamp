@@ -1,0 +1,22 @@
+body {
+    background-color: lightblue;
+    text-align: center;
+    font-family: Arial;
+}
+
+h1 {
+    background-color: navy;
+    color: white;
+    padding: 20px;
+}
+
+h2 {
+    color: darkblue;
+}
+
+button {
+    background-color: navy;
+    color: white;
+    padding: 10px;
+    border: none;
+}
